@@ -14,30 +14,49 @@ import shutil
 import tempfile
 import subprocess
 import webbrowser
+import logging
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from pathlib import Path
 from urllib.request import pathname2url
+
+# ── 로그 파일 설정 (디버깅용 - %TEMP%\hwpviewer.log) ──────────────────────────
+_log_path = os.path.join(tempfile.gettempdir(), 'hwpviewer.log')
+logging.basicConfig(
+    filename=_log_path,
+    level=logging.DEBUG,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    encoding='utf-8',
+)
+log = logging.getLogger('hwpviewer')
 
 # ── 의존성 체크 ────────────────────────────────────────────────────────────────
 
 try:
     from tkinterweb import HtmlFrame
     HAS_TKWEB = True
-except ImportError:
+    log.info("tkinterweb 로드 OK")
+except ImportError as e:
     HAS_TKWEB = False
+    log.warning(f"tkinterweb 없음: {e}")
 
 try:
     import hwp5  # noqa
     HAS_HWP5 = True
-except ImportError:
+    log.info(f"hwp5 로드 OK: {hwp5.__version__}")
+except ImportError as e:
     HAS_HWP5 = False
+    log.warning(f"hwp5 없음: {e}")
 
 try:
     import olefile
     HAS_OLE = True
-except ImportError:
+    log.info("olefile 로드 OK")
+except ImportError as e:
     HAS_OLE = False
+    log.warning(f"olefile 없음: {e}")
+
+log.info(f"sys.frozen={getattr(sys, 'frozen', False)}, exe={sys.executable}")
 
 
 # ── HWP → HTML 변환 ────────────────────────────────────────────────────────────
@@ -347,38 +366,49 @@ class HwpViewer(tk.Tk):
         self._lbl_file.config(text=Path(hwp_path).name)
         self._set_status("변환 중…")
         self.update_idletasks()
+        log.info(f"파일 열기 시작: {hwp_path}")
+        log.info(f"view_mode={self._view_mode}, HAS_HWP5={HAS_HWP5}, HAS_TKWEB={HAS_TKWEB}")
 
         # ── pyhwp → HTML ──────────────────────────────────────────────────
         if HAS_HWP5:
             try:
+                log.info("convert_hwp_to_html 호출")
                 html_file, out_dir = convert_hwp_to_html(hwp_path)
+                log.info(f"변환 완료: {html_file}")
                 self._tmp_dirs.append(out_dir)
                 self._current_html = html_file
-                url = path_to_file_url(html_file)
 
                 if self._view_mode == 'html':
-                    self._html_view.load_url(url)
+                    # HTML 내용을 직접 읽어서 렌더링 (load_url 대신 load_html 사용)
+                    html_content = Path(html_file).read_text(encoding='utf-8', errors='replace')
+                    base_url = path_to_file_url(str(Path(html_file).parent)) + '/'
+                    log.info(f"load_html 호출, base_url={base_url}")
+                    self._html_view.load_html(html_content, base_url)
                     self._set_status(f"{Path(hwp_path).name}  |  HTML 렌더링")
                 else:
-                    # tkinterweb 없음 → 자동으로 브라우저 열기
+                    url = path_to_file_url(html_file)
                     webbrowser.open(url)
                     self._set_status(f"브라우저에서 열림: {Path(html_file).name}")
+                log.info("파일 열기 완료")
                 return
             except Exception as exc:
+                log.exception(f"HTML 변환 실패: {exc}")
                 if not HAS_OLE:
                     messagebox.showerror("변환 오류", str(exc))
                     self._set_status("오류")
                     return
-                # olefile fallback 시도
                 self._set_status("HTML 변환 실패, 텍스트 모드로 전환…")
 
         # ── olefile 텍스트 추출 fallback ────────────────────────────────
         if HAS_OLE:
             try:
+                log.info("텍스트 추출 fallback 시도")
                 content = _extract_text_fallback(hwp_path)
                 self._show_plain_text(content)
                 self._set_status(f"{Path(hwp_path).name}  |  텍스트 모드 (pyhwp 미설치)")
+                log.info("텍스트 추출 완료")
             except Exception as exc:
+                log.exception(f"텍스트 추출 실패: {exc}")
                 messagebox.showerror("오류", str(exc))
                 self._set_status("오류")
         else:
