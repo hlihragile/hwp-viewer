@@ -1,0 +1,4 @@
+olefile>=0.47
+pyhwp>=0.1b12
+tkinterweb>=3.23
+pyinstaller>=6.0

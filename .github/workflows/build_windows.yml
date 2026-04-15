@@ -1,0 +1,49 @@
+name: Windows EXE 빌드
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:   # GitHub 웹에서 수동 실행 가능
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 패키지 설치
+        run: pip install pyhwp tkinterweb olefile pyinstaller
+
+      - name: PyInstaller 빌드
+        shell: pwsh
+        run: |
+          $hwp5 = python -c "import hwp5, os; print(os.path.dirname(hwp5.__file__))"
+          pyinstaller `
+            --onefile `
+            --windowed `
+            --name "HWP뷰어" `
+            --add-data "$hwp5;hwp5" `
+            --hidden-import tkinterweb `
+            --hidden-import olefile `
+            --hidden-import hwp5 `
+            --hidden-import hwp5.hwp5html `
+            --hidden-import hwp5.xsl `
+            --hidden-import lxml `
+            --hidden-import lxml.etree `
+            --hidden-import sysconfig `
+            hwp_viewer.py
+
+      - name: EXE 파일 업로드 (아티팩트)
+        uses: actions/upload-artifact@v4
+        with:
+          name: HWP뷰어-Windows
+          path: dist/HWP뷰어.exe
+          if-no-files-found: error
+          retention-days: 30
