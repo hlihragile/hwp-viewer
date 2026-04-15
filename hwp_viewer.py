@@ -42,23 +42,37 @@ except ImportError:
 
 # ── HWP → HTML 변환 ────────────────────────────────────────────────────────────
 
+def _convert_hwp_api(hwp_path: str, out_dir: str):
+    """
+    pyhwp Python API를 직접 호출해 HTML 변환합니다.
+    PyInstaller 번들 환경에서 subprocess 대신 사용합니다.
+    """
+    old_argv = sys.argv[:]
+    try:
+        sys.argv = ['hwp5html', '--output', out_dir, hwp_path]
+        from hwp5.hwp5html import main
+        main()
+    except SystemExit as e:
+        if e.code not in (0, None):
+            raise RuntimeError(f"hwp5html 변환 실패 (exit {e.code})")
+    finally:
+        sys.argv = old_argv
+
+
 def _find_hwp5html() -> list:
-    """hwp5html 실행 명령어를 찾아 반환합니다."""
+    """일반 Python 환경에서 hwp5html 실행 명령어를 찾아 반환합니다."""
     import sysconfig
 
-    # PATH에서 직접 검색
     found = shutil.which('hwp5html') or shutil.which('hwp5html.exe')
     if found:
         return [found]
 
-    # sysconfig 기반 스크립트 디렉토리 (macOS/Linux venv 포함)
     scripts = Path(sysconfig.get_path('scripts'))
     for name in ('hwp5html', 'hwp5html.exe'):
         cand = scripts / name
         if cand.exists():
             return [str(cand)]
 
-    # Python 실행파일 인접 경로 탐색 (Windows venv 등)
     base = Path(sys.executable).parent
     for cand in [
         base / 'hwp5html',
@@ -69,7 +83,6 @@ def _find_hwp5html() -> list:
         if cand.exists():
             return [str(cand)]
 
-    # 최후 수단: python -m 방식
     return [sys.executable, '-m', 'hwp5.hwp5html']
 
 
@@ -87,31 +100,38 @@ def convert_hwp_to_html(hwp_path: str) -> tuple:
         )
 
     out_dir = tempfile.mkdtemp(prefix='hwpview_')
-    cmd = _find_hwp5html() + ['--output', out_dir, hwp_path]
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            encoding='utf-8',
-            errors='replace',
-        )
-    except subprocess.TimeoutExpired:
-        shutil.rmtree(out_dir, ignore_errors=True)
-        raise RuntimeError("변환 시간이 초과되었습니다 (60초).")
-    except FileNotFoundError:
-        shutil.rmtree(out_dir, ignore_errors=True)
-        raise RuntimeError(
-            "hwp5html 명령을 찾을 수 없습니다.\n"
-            "pip install pyhwp 를 실행해 주세요."
-        )
+    # PyInstaller 번들 환경: sys.executable이 .exe 자신이므로
+    # subprocess 대신 Python API를 직접 호출해야 함
+    if getattr(sys, 'frozen', False):
+        try:
+            _convert_hwp_api(hwp_path, out_dir)
+        except Exception as exc:
+            shutil.rmtree(out_dir, ignore_errors=True)
+            raise RuntimeError(f"변환 실패: {exc}")
+    else:
+        # 일반 Python 환경: subprocess로 hwp5html 호출
+        cmd = _find_hwp5html() + ['--output', out_dir, hwp_path]
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                encoding='utf-8',
+                errors='replace',
+            )
+        except subprocess.TimeoutExpired:
+            shutil.rmtree(out_dir, ignore_errors=True)
+            raise RuntimeError("변환 시간이 초과되었습니다 (60초).")
+        except FileNotFoundError:
+            shutil.rmtree(out_dir, ignore_errors=True)
+            raise RuntimeError("hwp5html 명령을 찾을 수 없습니다.\npip install pyhwp 를 실행해 주세요.")
 
-    if result.returncode != 0:
-        shutil.rmtree(out_dir, ignore_errors=True)
-        detail = (result.stderr or result.stdout or '').strip()
-        raise RuntimeError(f"변환 실패 (exit {result.returncode})\n\n{detail}")
+        if result.returncode != 0:
+            shutil.rmtree(out_dir, ignore_errors=True)
+            detail = (result.stderr or result.stdout or '').strip()
+            raise RuntimeError(f"변환 실패 (exit {result.returncode})\n\n{detail}")
 
     # 생성된 HTML/XHTML 파일 검색
     for pattern in ('*.html', '*.xhtml', '*.htm'):
